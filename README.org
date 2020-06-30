@@ -1,0 +1,500 @@
+#+TITLE: rails6-libvips-example
+
+* 何を伝えたいか？
+** 何で書くか？
+Rails 6 でユーザーがアップロードしてくれた avatar 等の画像ファイルを ActiveStorage を利用して S3 等に保存したい。さらに他のユーザーがその avatar ファイルを閲覧する際には、ファイルサイズを小さく保ちたい。例えば閲覧時の avatar ファイルは jpeg に変換し、画像の大きさも一定の範囲に収まるようにすることで、ユーザー体験におけるパフォーマンスの向上、ネットワーク通信量(とそれにかかる料金)の節約、またアプリケーションを運用する立場としてデータ通信量(とそれにかかる料金)の節約を謀りたい。
+
+[[https://developers.google.com/web/fundamentals/performance/optimizing-content-efficiency/image-optimization][Image Optimization  |  Web Fundamentals  |  Google Developers]]
+
+この記事は、諸事情で以下条件の組み合せでアプリケーションを構築したときの手順をまとめたものである。
+
+- 全環境共通
+  - Ruby on Rails 6
+  - ActiveStorage を用いて画像ファイルを扱う
+  - ImageProcessing にて閲覧時に画像の変換を行う
+  - ImageProcessing のバックエンドには libvips を用いる
+- 本番環境
+  - Heroku
+  - ストレージは S3
+- 開発環境
+  - ストレージは minio
+
+前半部分は、Rails 6 で ActiveStorage で minio をストレージとして用いて開発するための開発環境の構築手順についてのべる。
+
+後半部分は、前半で作成したアプリケーションを heroku にデプロイして動作を確認する方法についてのべる。
+
+** 想定読者は誰か？
+
+* 文章
+** 概要
+Web アプリケーションを作成する際、ユーザーのアップロードした画像を AWS S3 等クラウドのストレージサービスに保存したいときがあります。また、アップロードされた画像を他のユーザーが閲覧する際には、画像に対し一定の変換を施したい場合があります。
+
+例えばユーザーがプロフィールにアバター画像を登録できるようなアプリケーションの場合、1MB の png ファイルがアップロードされた場合、他のユーザーがこのアバター画像を閲覧する際は jpg に変換するなどして、閲覧ユーザーのネットワーク通信量とそれに起因するコストを軽減するのが望ましいと考えられます([[https://developers.google.com/web/fundamentals/performance/optimizing-content-efficiency/image-optimization][Web Fundamentals - 画像の最適化]])。またアプリケーションを運用する立場としても、ダウンロードされる画像のサイズは小さい方が運用コストを抑えることができます。
+
+Ruby on Rails では [[https://railsguides.jp/active_storage_overview.html][Active Storage]] を使うことでクラウドなどのストレージを簡単に利用できます。また Active Storage では [[https://github.com/janko/image_processing][image_processing]] を利用することで、閲覧時に画像の変換を行うことができます。
+
+今回、諸事情で Ruby on Rails 6 で書かれたアプリケーションにて、本番環境に Heroku を利用し、AWS S3 に画像を保存する必要があったため、そのとき調べたことをまとめてみます。
+
+** 想定する読者
+前半は、本番で AWS S3 を利用することを前提として、開発時は minio を S3 にみたてて、Ruby on Rails 6 で Active Storage を用いて画像を保存する方法について、サンプルアプリケーションを元に記載します。
+
+後半は前半で作ったサンプルアプリケーションを Heroku にデプロイして実際に動作確認する方法について記載します。
+
+各環境毎に以下の条件を設定しています。もし条件の一部が異る場合は、適宜読み替えて頂ければ、このドキュメントの鮮度が落ちない限りは参考になるかと思います。
+
+- 環境に依存しない条件
+  - Ruby on Rails 6
+  - Active Storage を用いて画像ファイルを扱う
+  - image_processing にて閲覧時に画像の変換を行う
+  - image_processing のバックエンドには libvips を用いる
+- 本番環境
+  - Heroku
+  - ストレージは S3
+- 開発環境
+  - ストレージは minio
+
+image_processing はバックエンドとして ImageMagick か [[https://libvips.github.io/libvips/install.html][libvips]] を選択できます。ここでは独断と偏見で libvips を選択しています(ImageMagick はどうしても脆弱性の温床というイメージが強く、積極的に採用できませんでした…)
+
+** サンプルアプリケーション
+rails new したアプリケーションに scaffold で users リソースを追加したものをサンプルのアプリケーションとして利用します。User モデルは name と、avatar(Active Storage により保存)のフィールドを持たせます。データベースは、Heroku がそもそも sqlite3 が NG なため、開発でも本番でも PostgreSQL を用いることとします。
+
+開発時は Ruby on Rails アプリケーション、データベース、minio 全てを docker-compose にて管理します。
+
+** 開発時に minio を S3 にみたてて Active Storage を利用する
+[[https://min.io/][minio]] は自身「High Performance, Kubernetes Native Object Storage」と名をうっていますが、ここでは S3 のスタブとして利用します。また、前述の通り、image_processing のバックエンドには libvips を利用します。
+
+*** サンプルアプリケーション
+サンプルアプリケーションは以下においてあります:
+
+https://github.com/p-baleine/rails6-libvips-example
+
+以下、各ステップに対応するようにタグが打ってあるので、必要に応じて参照ください。
+
+*** Step1: rails new([[https://github.com/p-baleine/rails6-libvips-example/tree/step1_first-application][タグ: step1_first-application]])
+Ruby on Rails のアプリケーションを新規作成しますが、このステップについては自明と思われるので省略します。
+
+アプリケーションを作成したら以下コマンドでデータベースを作成し、 http://localhost:3000/ にアクセスできることを確認します。
+
+#+begin_src sh
+docker-compose run web rake db:create
+#+end_src
+
+*** Step2: minio の導入([[https://github.com/p-baleine/rails6-libvips-example/tree/step2_install-minio][タグ: step2_install-minio]])
+docker-compose.yml に minio のサービスを追加します。
+
+#+begin_src diff
+index eca1be4..6811149 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,4 +1,9 @@
+ version: '3'
++
++networks:
++  app-tier:
++    driver: bridge
++
+ services:
+   db:
+     image: postgres
+@@ -6,6 +11,8 @@ services:
+       - ./tmp/db:/var/lib/postgresql/data
+     environment:
+       POSTGRES_PASSWORD: password
++    networks:
++      - app-tier
+   web:
+     build: .
+     command: bash -c "rm -f tmp/pids/server.pid && bundle exec rails s -p 3000 -b '0.0.0.0'"
+@@ -15,3 +22,21 @@ services:
+       - "3000:3000"
+     depends_on:
+       - db
++    networks:
++      - app-tier
++  minio:
++    image: bitnami/minio:latest
++    ports:
++      - "9000:9000"
++    networks:
++      - app-tier
++    volumes:
++      - minio:/data
++    environment:
++      MINIO_ACCESS_KEY: AKIAIOSFODNN7EXAMPLE
++      MINIO_SECRET_KEY: wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY
++      MINIO_DEFAULT_BUCKETS: libvipssample
++
++volumes:
++  minio:
++    driver: local
+#+end_src
+
+docker-compose up をして、 http://localhost:9000 にアクセスすると、MinIO Browser にアクセスできます。libvipssample というバケットがあるので、これのポリシーを「Read and Write」に変更しておきます。(docker-compose.yml 側でポリシーを設定する方法が分かりませんでした。)
+
+画像
+
+*** Step3: ActiveStorage の有効化([[https://github.com/p-baleine/rails6-libvips-example/tree/step3_enable-activestorage][タグ: step3_enable-activestorage]])
+Ruby on Rails の [[https://railsguides.jp/active_storage_overview.html][Active Storageに関するガイド]] を参考に、Active Storage を有効にします。
+
+まず、Gemfile に aws-sdk-s3 を追加します。
+
+#+begin_src diff
+diff --git a/Gemfile b/Gemfile
+index eac01cf..ad1c9a1 100644
+--- a/Gemfile
++++ b/Gemfile
+@@ -25,6 +25,8 @@ gem 'jbuilder', '~> 2.7'
+ # Use Active Storage variant
+ # gem 'image_processing', '~> 1.2'
+
++gem "aws-sdk-s3", require: false
++
+ # Reduces boot times through caching; required in config/boot.rb
+ gem 'bootsnap', '>= 1.4.2', require: false
+#+end_src
+
+一旦 docker-compose のビルドをして、別タブから exec でログインし Active Storage をインストールします。
+
+#+begin_src sh
+docker-compose up --build
+#+end_src
+
+#+begin_src sh
+# 別タブ等で
+docker-compose exec web bash
+rails active_storage:install
+rails db:migrate
+#+end_src
+
+次に config/storage.yml に開発向けの設定を追記します、config/environment/development.rb ではデフォルトで Active Storage のサービスに :local が指定されているので、config/storage.yml では local に関する設定を追記します。
+
+#+begin_src diff
+diff --git a/config/storage.yml b/config/storage.yml
+index d32f76e..f6de265 100644
+--- a/config/storage.yml
++++ b/config/storage.yml
+@@ -3,8 +3,13 @@ test:
+   root: <%= Rails.root.join("tmp/storage") %>
+
+ local:
+-  service: Disk
+-  root: <%= Rails.root.join("storage") %>
++  service: S3
++  access_key_id: AKIAIOSFODNN7EXAMPLE
++  secret_access_key: wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY
++  endpoint: http://minio:9000
++  region: us-east-1
++  bucket: libvipssample
++  force_path_style: true
+
+ # Use rails credentials:edit to set the AWS secrets (as aws:access_key_id|secret_access_key)
+ # amazon:
+#+end_src
+
+*** Step4: users リソースの追加([[https://github.com/p-baleine/rails6-libvips-example/tree/step4_add-users-resource][タグ: step4_add-users-resource]])
+サンプルアプリケーションでは name と avatar(Active Storage で保存する)をフィールドに持つ User モデルに対応したリソースを用意します。まずは name フィールドのみを持つリソースを scaffold で生成しておきます。
+
+#+begin_src sh
+rails g scaffold user name:string
+rails db:migrate
+#+end_src
+
+*** Step5: Active Storage の利用 〜 アバター画像の表示([[https://github.com/p-baleine/rails6-libvips-example/tree/step5_display-avatar][タグ: step5_display-avatar]])
+Step4 で生成された app/models/user.rb で has_one_attached マクロを用いて User モデルに avatar 画像を関連付けます。
+
+#+begin_src diff
+diff --git a/app/models/user.rb b/app/models/user.rb
+index 379658a..72de961 100644
+--- a/app/models/user.rb
++++ b/app/models/user.rb
+@@ -1,2 +1,3 @@
+ class User < ApplicationRecord
++  has_one_attached :avatar
+ end
+#+end_src
+
+また、app/controllers/users_controller.rb で create 時に avatar フィールドを受けとれるように params のメソッドを修正します。
+
+#+begin_src diff
+diff --git a/app/controllers/users_controller.rb b/app/controllers/users_controller.rb
+index 293571c..e4b4949 100644
+--- a/app/controllers/users_controller.rb
++++ b/app/controllers/users_controller.rb
+@@ -69,6 +69,6 @@ class UsersController < ApplicationController
+
+     # Only allow a list of trusted parameters through.
+     def user_params
+-      params.require(:user).permit(:name)
++      params.require(:user).permit(:name, :avatar)
+     end
+ end
+#+end_src
+
+それから、ユーザー作成時のフォーム(app/views/users/_form.rb)にファイルインプットを追加し、 /users/:id で画像を表示するよう、 app/views/users/show.rb を編集します。
+
+#+begin_src diff
+diff --git a/app/views/users/_form.html.erb b/app/views/users/_form.html.erb
+index bea586e..e9178cb 100644
+--- a/app/views/users/_form.html.erb
++++ b/app/views/users/_form.html.erb
+@@ -16,6 +16,11 @@
+     <%= form.text_field :name %>
+   </div>
+
++  <div class="field">
++    <%= form.label :avatar %>
++    <%= form.file_field :avatar %>
++  </div>
++
+   <div class="actions">
+     <%= form.submit %>
+   </div>
+diff --git a/app/views/users/show.html.erb b/app/views/users/show.html.erb
+index 3f5c2a2..8dfea30 100644
+--- a/app/views/users/show.html.erb
++++ b/app/views/users/show.html.erb
+@@ -5,5 +5,9 @@
+   <%= @user.name %>
+ </p>
+
++<div>
++  <%= image_tag url_for(@user.avatar) %>
++</div>
++
+ <%= link_to 'Edit', edit_user_path(@user) %> |
+ <%= link_to 'Back', users_path %>
+#+end_src
+
+また、 =http://minio...= の URL にアクセスできるよう、ホストのパソコンの /etc/hosts に以下のエントリーを追記しておきます。
+
+#+begin_src sh
+cat /etc/hosts
+127.0.0.1       minio
+#+end_src
+
+http://localhost:3000/users にアクセスすると、空のユーザー一覧が表示されると思います。「New User」から画像つきでユーザーを新規登録してみてください。上手くいくと、登録されたユーザーの詳細画面が、画像と共に表示されます。
+(ここでは [[https://www.irasutoya.com/][いらすとや]] の png 画像を利用させてもらっています。)
+
+絵!
+
+また、minio のバケットのページ(http://localhost:9000/minio/libvipssample/) を見ると、画像が追加されているのが確認できます。
+
+*** Step6: 閲覧時の画像の変換([[https://github.com/p-baleine/rails6-libvips-example/tree/step6_convert-images][タグ: step6_convert-images]])
+このままではあるユーザーが 10MB の png ファイルをアップロードした場合、別のユーザーがこれを閲覧すると、10MB のファイルをダウンロードする必要があり、ユーザーとしてもアプリケーションの運用者としてもとてもコストが嵩んでしまうため、閲覧時に画像の変換を行います。
+
+Active Storage で image_processing を利用すると、閲覧時に画像を変換できます。正確には、指定された変換を施された画像がまだストレージにない場合のみ、変換を施した画像をストレージに保存してこれをユーザーに提示するという仕様のようです。([[https://railsguides.jp/active_storage_overview.html#%E7%94%BB%E5%83%8F%E3%82%92%E5%A4%89%E6%8F%9B%E3%81%99%E3%82%8B][Active Storage - 画像を変換する]])
+
+image_processing ではバックエンドとして ImageMagick と libvips を選択できますが、ここでは libvips を用いています。
+
+まず、Dockerfile に libvips のインストール手順を追記します。
+
+#+begin_src diff
+diff --git a/Dockerfile b/Dockerfile
+index 423786e..87c2139 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -10,6 +10,16 @@ RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
+   && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list \
+   && apt-get update && apt-get install -y yarn
+
++# libvips
++RUN cd /tmp \
++  && curl -LO https://github.com/libvips/libvips/releases/download/v8.9.2/vips-8.9.2.tar.gz \
++  && tar zxvf vips-8.9.2.tar.gz \
++  && cd vips-8.9.2 \
++  && ./configure \
++  && make \
++  && make install \
++  && ldconfig
++
+ WORKDIR /app
+
+ COPY Gemfile /app/Gemfile
+#+end_src
+
+また、Gemfile に image_processing を追記します。
+
+#+begin_src diff
+diff --git a/Gemfile b/Gemfile
+index ad1c9a1..ea0e03e 100644
+--- a/Gemfile
++++ b/Gemfile
+@@ -23,7 +23,7 @@ gem 'jbuilder', '~> 2.7'
+ # gem 'bcrypt', '~> 3.1.7'
+
+ # Use Active Storage variant
+-# gem 'image_processing', '~> 1.2'
++gem 'image_processing', '~> 1.2'
+
+ gem "aws-sdk-s3", require: false
+#+end_src
+
+ここで一度 docker-compose up --build しておきます。
+
+image_processing で vips を利用するため、config/application.rb に以下を追記します。
+
+#+begin_src diff
+diff --git a/config/application.rb b/config/application.rb
+index a6c63a9..03a4afe 100644
+--- a/config/application.rb
++++ b/config/application.rb
+@@ -15,5 +15,7 @@ module App
+     # Application configuration can go into files in config/initializers
+     # -- all .rb files in that directory are automatically loaded after loading
+     # the framework and any gems in your application.
++
++    config.active_storage.variant_processor = :vips
+   end
+ end
+#+end_src
+
+/users/:id で、通常の画像に加えて、png を jpg に変換した画像、それから小くリサイズした画像も一緒に表示するように app/views/users/show.html.erb を編集します。
+
+#+begin_src diff
+diff --git a/app/views/users/show.html.erb b/app/views/users/show.html.erb
+index 8dfea30..2a6211d 100644
+--- a/app/views/users/show.html.erb
++++ b/app/views/users/show.html.erb
+@@ -6,8 +6,19 @@
+ </p>
+
+ <div>
++  <h3>No preprocessing.</h3>
+   <%= image_tag url_for(@user.avatar) %>
+ </div>
+
++<div>
++  <h3>Convert image from png to jpg.</h3>
++  <%= image_tag @user.avatar.variant(convert: 'jpg') %>
++</div>
++
++<div>
++  <h3>Resize.</h3>
++  <%= image_tag @user.avatar.variant(resize_to_limit: [100, 100]) %>
++</div>
++
+ <%= link_to 'Edit', edit_user_path(@user) %> |
+ <%= link_to 'Back', users_path %>
+#+end_src
+
+http://localhost:3000/users から先程作成したユーザーの詳細画面を確認します。
+
+絵!
+
+元が等価 png の画像なので、jpg に変換した画像では背景が黒くなっているのが確認できます。
+
+また、MinIO Browser を確認すると、variant というディレクトリが生えていて、その下に変換された画像が格納されているのが確認できると思います。
+
+絵!
+
+** Heroku で動かす
+あらかじめ AWS S3 の公開バケット作っておきます、またこのバケットにアクセスできるユーザー(or IAM)のクレデンシャル情報を得ておきます。
+
+*** Step7: Heroku 向けの設定([[https://github.com/p-baleine/rails6-libvips-example/tree/step7_deploy-to-heroku][タグ: step7_deploy-to-heroku]])
+production 環境向けの設定を config/environments/production.rb に追記します。
+
+#+begin_src diff
+diff --git a/config/environments/production.rb b/config/environments/production.rb
+index cfe4e80..d6abb97 100644
+--- a/config/environments/production.rb
++++ b/config/environments/production.rb
+@@ -36,7 +36,7 @@ Rails.application.configure do
+   # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX
+
+   # Store uploaded files on the local file system (see config/storage.yml for options).
+-  config.active_storage.service = :local
++  config.active_storage.service = :amazon
+
+   # Mount Action Cable outside main proc
+#+end_src
+
+また、対応するストレージの設定を config/storage.yml に記述します。(ここでは credential の機能を用いて設定しています [[https://railsguides.jp/security.html#%E5%88%A9%E7%94%A8%E7%92%B0%E5%A2%83%E3%81%AE%E3%82%BB%E3%82%AD%E3%83%A5%E3%83%AA%E3%83%86%E3%82%A3][Rails セキュリティガイド - Railsガイド]])
+
+#+begin_src diff
+diff --git a/config/storage.yml b/config/storage.yml
+index f6de265..49e2ba6 100644
+--- a/config/storage.yml
++++ b/config/storage.yml
+@@ -12,12 +12,12 @@ local:
+   force_path_style: true
+
+ # Use rails credentials:edit to set the AWS secrets (as aws:access_key_id|secret_access_key)
+-# amazon:
+-#   service: S3
+-#   access_key_id: <%= Rails.application.credentials.dig(:aws, :access_key_id) %>
+-#   secret_access_key: <%= Rails.application.credentials.dig(:aws, :secret_access_key) %>
+-#   region: us-east-1
+-#   bucket: your_own_bucket
++amazon:
++  service: S3
++  access_key_id: <%= Rails.application.credentials.dig(:aws, :access_key_id) %>
++  secret_access_key: <%= Rails.application.credentials.dig(:aws, :secret_access_key) %>
++  region: ap-northeast-1
++  bucket: libvipssample
+
+ # Remember not to checkin your GCS keyfile to a repository
+ # google:
+#+end_src
+
+*** Step8: デプロイする
+heroku コマンドを使ってデプロイします。
+
+heroku コマンドのインストールについては https://devcenter.heroku.com/articles/heroku-cli を参考にしてください。
+
+まず、ログインして heroku のアプリケーションを作成します。
+
+#+begin_src sh
+heroku login
+heroku create
+#+end_src
+
+credential を利用している場合は、 config/master.key の内容を heroku の環境変数に設定します。
+
+#+begin_src sh
+heroku config:set RAILS_MASTER_KEY=`cat config/master.key`
+#+end_src
+
+ここまで出来たら一度 heroku に push して deploy します。
+
+#+begin_src sh
+git push heroku master
+#+end_src
+
+デプロイに成功したらマイグレーションを実行しておきます。
+
+#+begin_src sh
+heroku run rake db:migrate
+#+end_src
+
+libvips を heroku で利用するには専用の buildpack を追加する必要があります。また、libvips はいくつか apt のパッケージに依存するため、これをインストールするための buildpack も追加します。
+
+#+begin_src sh
+heroku buildpacks:add --index 1 https://github.com/heroku/heroku-buildpack-apt
+heroku buildpacks:add --index 2 https://github.com/brandoncc/heroku-buildpack-vips
+#+end_src
+
+以下内容で Aptfile を作成、コミットします。
+
+#+begin_src sh
+cat Aptfile
+libglib2.0-0
+libglib2.0-dev
+libpoppler-glib8
+#+end_src
+
+最後にもう一度 heroku に push します。
+
+#+begin_src sh
+git push heroku master
+#+end_src
+
+デプロイが終わったら、以下コマンドでブラウザを開きます
+
+#+begin_src sh
+heroku ps:scale web=1
+heroku open
+#+end_src
+
+ブラウザが開いたら(ルートにアクセスしようとしてエラーが表示されているかもしれませんが無視してください)、 =/users= にアクセスし、ユーザーの作成、詳細を閲覧して動作確認します。
+
+また、ここで AWS コンソールから S3 のバケットの中身を見てみると、やはり variant というディレクトリが生えていて、その下に変換された画像が格納されているのが確認できると思います。
