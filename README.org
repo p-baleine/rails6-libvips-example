@@ -1,30 +1,5 @@
 #+TITLE: rails6-libvips-example
 
-* 何を伝えたいか？
-** 何で書くか？
-Rails 6 でユーザーがアップロードしてくれた avatar 等の画像ファイルを ActiveStorage を利用して S3 等に保存したい。さらに他のユーザーがその avatar ファイルを閲覧する際には、ファイルサイズを小さく保ちたい。例えば閲覧時の avatar ファイルは jpeg に変換し、画像の大きさも一定の範囲に収まるようにすることで、ユーザー体験におけるパフォーマンスの向上、ネットワーク通信量(とそれにかかる料金)の節約、またアプリケーションを運用する立場としてデータ通信量(とそれにかかる料金)の節約を謀りたい。
-
-[[https://developers.google.com/web/fundamentals/performance/optimizing-content-efficiency/image-optimization][Image Optimization  |  Web Fundamentals  |  Google Developers]]
-
-この記事は、諸事情で以下条件の組み合せでアプリケーションを構築したときの手順をまとめたものである。
-
-- 全環境共通
-  - Ruby on Rails 6
-  - ActiveStorage を用いて画像ファイルを扱う
-  - ImageProcessing にて閲覧時に画像の変換を行う
-  - ImageProcessing のバックエンドには libvips を用いる
-- 本番環境
-  - Heroku
-  - ストレージは S3
-- 開発環境
-  - ストレージは minio
-
-前半部分は、Rails 6 で ActiveStorage で minio をストレージとして用いて開発するための開発環境の構築手順についてのべる。
-
-後半部分は、前半で作成したアプリケーションを heroku にデプロイして動作を確認する方法についてのべる。
-
-** 想定読者は誰か？
-
 * 文章
 ** 概要
 Web アプリケーションを作成する際、ユーザーのアップロードした画像を AWS S3 等クラウドのストレージサービスに保存したいときがあります。また、アップロードされた画像を他のユーザーが閲覧する際には、画像に対し一定の変換を施したい場合があります。
