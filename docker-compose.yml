@@ -1,4 +1,9 @@
 version: '3'
+
+networks:
+  app-tier:
+    driver: bridge
+
 services:
   db:
     image: postgres
@@ -6,6 +11,8 @@ services:
       - ./tmp/db:/var/lib/postgresql/data
     environment:
       POSTGRES_PASSWORD: password
+    networks:
+      - app-tier
   web:
     build: .
     command: bash -c "rm -f tmp/pids/server.pid && bundle exec rails s -p 3000 -b '0.0.0.0'"
@@ -15,3 +22,21 @@ services:
       - "3000:3000"
     depends_on:
       - db
+    networks:
+      - app-tier
+  minio:
+    image: bitnami/minio:latest
+    ports:
+      - "9000:9000"
+    networks:
+      - app-tier
+    volumes:
+      - minio:/data
+    environment:
+      MINIO_ACCESS_KEY: AKIAIOSFODNN7EXAMPLE
+      MINIO_SECRET_KEY: wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY
+      MINIO_DEFAULT_BUCKETS: libvipssample
+
+volumes:
+  minio:
+    driver: local
