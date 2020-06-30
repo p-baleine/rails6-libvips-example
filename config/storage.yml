@@ -3,8 +3,13 @@ test:
   root: <%= Rails.root.join("tmp/storage") %>
 
 local:
-  service: Disk
-  root: <%= Rails.root.join("storage") %>
+  service: S3
+  access_key_id: AKIAIOSFODNN7EXAMPLE
+  secret_access_key: wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY
+  endpoint: http://minio:9000
+  region: us-east-1
+  bucket: libvipssample
+  force_path_style: true
 
 # Use rails credentials:edit to set the AWS secrets (as aws:access_key_id|secret_access_key)
 # amazon:
