@@ -6,7 +6,18 @@
 </p>
 
 <div>
+  <h3>No preprocessing.</h3>
   <%= image_tag url_for(@user.avatar) %>
+</div>
+
+<div>
+  <h3>Convert image from png to jpg.</h3>
+  <%= image_tag @user.avatar.variant(convert: 'jpg').processed %>
+</div>
+
+<div>
+  <h3>Resize.</h3>
+  <%= image_tag @user.avatar.variant(resize_to_limit: [100, 100]).processed %>
 </div>
 
 <%= link_to 'Edit', edit_user_path(@user) %> |

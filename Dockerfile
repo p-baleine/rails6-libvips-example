@@ -10,6 +10,16 @@ RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
   && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list \
   && apt-get update && apt-get install -y yarn
 
+# libvips
+RUN cd /tmp \
+  && curl -LO https://github.com/libvips/libvips/releases/download/v8.9.2/vips-8.9.2.tar.gz \
+  && tar zxvf vips-8.9.2.tar.gz \
+  && cd vips-8.9.2 \
+  && ./configure \
+  && make \
+  && make install \
+  && ldconfig
+
 WORKDIR /app
 
 COPY Gemfile /app/Gemfile
